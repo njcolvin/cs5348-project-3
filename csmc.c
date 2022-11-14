@@ -64,4 +64,7 @@ int main(int argc, char *argv[])
         Pthread_join(t_threads[i], NULL);
     }
 
+    free(s_threads);
+    free(t_threads);
+
 }
