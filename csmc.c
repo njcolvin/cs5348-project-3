@@ -1,23 +1,42 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <semaphore.h>
+#include <unistd.h>
 #include "common.h"
 #include "common_threads.h"
 
 const int num_arguments = 5;
-pthread_t *s_threads, *t_threads;
+pthread_t *s_threads, *t_threads, *c_thread;
 
-void *PrintHello(void *threadid) {
+// generate a random number between 0 and 1 inclusive
+double RandomFraction() {
+    return (double) rand() / (double) RAND_MAX;
+}
+
+void *StudentThread(void *threadid) {
     int tid;
     tid = *(int*)threadid;
-    printf("Hello World! Student Thread ID, %d\n", tid);
+    double rand_frac = RandomFraction();
+
+    // sleep for 2ms * random fraction
+    printf("student %d sleeping for %lf...\n", tid, 2000 * rand_frac);
+    usleep(2000 * rand_frac);
+    printf("student %d awake from sleeping...\n", tid);
+
     return 0;
 }
 
-void *PrintHelloTutor(void *threadid) {
+void *TutorThread(void *threadid) {
     int tid;
     tid = *(int*)threadid;
     printf("Hello World! Tutor Thread ID, %d\n", tid);
+    return 0;
+}
+
+void *CoordinatorThread(void *threadid) {
+    int tid;
+    tid = *(int*)threadid;
+    printf("Hello World! Coordinator Thread ID, %d\n", tid);
     return 0;
 }
 
@@ -39,32 +58,45 @@ int main(int argc, char *argv[])
 
     s_threads = (pthread_t*) malloc(students * sizeof(pthread_t));
     t_threads = (pthread_t*) malloc(tutors * sizeof(pthread_t));
+    c_thread = (pthread_t*) malloc(sizeof(pthread_t));
 
-    for (int i = 0; i < students; i++) {
+    int i;
+
+    for (i = 0; i < students; i++) {
         printf("creating student thread %d\n", i);
         void *ptr = malloc(sizeof(int));
         *(int*)ptr = i;
-        Pthread_create(&s_threads[i], NULL, PrintHello, ptr);
+        Pthread_create(&s_threads[i], NULL, StudentThread, ptr);
     }
 
-    for (int i = 0; i < tutors; i++) {
+    for (i = 0; i < tutors; i++) {
         printf("creating tutor thread %d\n", i);
         void *ptr = malloc(sizeof(int));
         *(int*)ptr = i;
-        Pthread_create(&t_threads[i], NULL, PrintHelloTutor, ptr);
+        Pthread_create(&t_threads[i], NULL, TutorThread, ptr);
     }
 
-    for (int i = 0; i < students; i++) {
+    printf("creating coordinator thread 0\n");
+    void *ptr = malloc(sizeof(int));
+    *(int*)ptr = 0;
+    Pthread_create(c_thread, NULL, CoordinatorThread, ptr);
+
+    for (i = 0; i < students; i++) {
         printf("joining student thread %d\n", i);
         Pthread_join(s_threads[i], NULL);
     }
 
-    for (int i = 0; i < tutors; i++) {
+    for (i = 0; i < tutors; i++) {
         printf("joining tutor thread %d\n", i);
         Pthread_join(t_threads[i], NULL);
     }
 
+    printf("joining coordinator thread 0\n");
+    Pthread_join(*c_thread, NULL);
+
+
     free(s_threads);
     free(t_threads);
+    free(c_thread);
 
 }
