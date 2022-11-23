@@ -5,19 +5,56 @@
 #include "common.h"
 #include "common_threads.h"
 
+void error(char *message) {
+    fprintf(stderr, "%s", message);
+    exit(EXIT_FAILURE);
+}
+
 const int num_arguments = 5;
 pthread_t *s_threads, *t_threads, *c_thread;
-sem_t chair_free, tutor_ready, student_ready, help_count_free;
-int students, tutors, chairs, help, num_free_chairs, help_count;
+sem_t chair_free, tutor_ready, student_ready, num_tutored_free;
+int students, tutors, chairs, help, num_free_chairs, num_tutored;
+
+struct Student {
+    int id, helped_times;
+};
+
+struct Node {
+    struct Student value;
+    struct Node *next;
+};
+
+struct FIFO {
+    struct Node *front;
+    struct Node *back;
+};
+
+void enqueue(struct FIFO fifo, struct Student _value) {
+    struct Node *new_node = (struct Node *) malloc(sizeof(struct Node));
+    new_node->value = _value;
+
+    if (fifo.front == NULL) {
+        fifo.front = new_node;
+        fifo.back = fifo.front;
+    } else {
+        fifo.back->next = new_node;
+        fifo.back = fifo.back->next;
+    }
+}
+
+struct Student dequeue(struct FIFO fifo) {
+    if (fifo.front == NULL)
+        error("Error. Nothing to dequeue.\n");
+
+    struct Student value = fifo.front->value;
+    fifo.front = fifo.front->next;
+
+    return value;
+}
 
 // generate a random number between 0 and 1 inclusive
 double RandomFraction() {
     return (double) rand() / (double) RAND_MAX;
-}
-
-void error(char *message) {
-    fprintf(stderr, "%s", message);
-    exit(EXIT_FAILURE);
 }
 
 void *StudentThread(void *arg) {
@@ -83,7 +120,7 @@ void *TutorThread(void *arg) {
     int id;
     id = *(int*)arg;
 
-    while (help_count < help * students) {
+    while (num_tutored < help * students) {
         printf("Tutor %d waiting for a student\n", id);
 
         // wait for a student to call me
@@ -99,12 +136,12 @@ void *TutorThread(void *arg) {
         // TODO: tutor
         // TODO: start over
         // TODO: exit after all students are helped (I might not be the tutor who helped last student)
-        if (sem_wait(&help_count_free) != 0)
-            error("Error. Failed to wait for help_count_free.\n");
-        help_count++;
-        printf("Tutor %d incremented help count. Help count = %d\n", id, help_count);
-        if (sem_post(&help_count_free) != 0)
-            error("Error. Failed to post help_count_free.\n");
+        if (sem_wait(&num_tutored_free) != 0)
+            error("Error. Failed to wait for num_tutored_free.\n");
+        num_tutored++;
+        printf("Tutor %d incremented help count. Help count = %d\n", id, num_tutored);
+        if (sem_post(&num_tutored_free) != 0)
+            error("Error. Failed to post num_tutored_free.\n");
     }
     
     return 0;
@@ -133,7 +170,7 @@ int main(int argc, char *argv[])
     chairs = atoi(argv[3]);
     help = atoi(argv[4]);
     num_free_chairs = chairs;
-    help_count = 0;
+    num_tutored = 0;
 
     if (students < 0 || tutors < 0 || chairs < 0 || help < 0)
         error("Error. Arguments must be nonnegative.\n");
@@ -153,8 +190,8 @@ int main(int argc, char *argv[])
     if (sem_init(&student_ready, 0, 0) != 0)
         error("Error. Failed to init student_ready semaphore\n");
 
-    if (sem_init(&help_count_free, 0, 1) != 0)
-        error("Error. Failed to init help_count_free semaphore\n");
+    if (sem_init(&num_tutored_free, 0, 1) != 0)
+        error("Error. Failed to init num_tutored_free semaphore\n");
 
     // start threads
     int i;
