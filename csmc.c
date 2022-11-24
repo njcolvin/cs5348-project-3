@@ -45,7 +45,9 @@ sem_t coordinator_ready;
 sem_t student_tutors_free;
 // busy_tutors lock
 sem_t busy_tutors_free;
-int students, tutors, chairs, help, num_free_chairs, num_tutored, *student_tutors, busy_tutors;
+// total_requests lock
+sem_t total_requests_free;
+int students, tutors, chairs, help, num_free_chairs, num_tutored, *student_tutors, busy_tutors, total_requests;
 struct FIFO *waiting_room, *priority_rooms;
 
 
@@ -87,6 +89,7 @@ void *StudentThread(void *arg) {
     // student programs for a random interval between 0 and 2ms
     // then checks if there is a free chair in the waiting room
     while (this_student.helped_times < help) {
+        // printf("IN STUDENT THREAD\n");
         // sleep for 2ms * random fraction
         usleep(2000 * RandomFraction());
 
@@ -101,7 +104,8 @@ void *StudentThread(void *arg) {
             if (sem_post(&chair_free) != 0)
                 error("Error. Failed to post chair_free.\n");
         } else {
-            num_free_chairs--;        
+            num_free_chairs--;
+            total_requests++;        
             printf("S: Student %d takes a seat. Empty chairs = %d.\n", id, num_free_chairs);
 
             if (sem_post(&chair_free) != 0)
@@ -131,9 +135,9 @@ void *StudentThread(void *arg) {
             // get num_chair semaphore
             if (sem_wait(&chair_free) != 0)
                 error("Error. Failed to wait for chair_free.\n");
-            printf("student %d acquired chair_free again. num_free_chairs = %d\n", id, num_free_chairs);
+            // printf("student %d acquired chair_free again. num_free_chairs = %d\n", id, num_free_chairs);
             num_free_chairs++;
-            printf("student %d incremented num_free_chairs. num_free_chairs = %d\n", id, num_free_chairs);
+            // printf("student %d incremented num_free_chairs. num_free_chairs = %d\n", id, num_free_chairs);
             if (sem_post(&chair_free) != 0)
                 error("Error. Failed to post chair_free.\n");
 
@@ -150,7 +154,7 @@ void *StudentThread(void *arg) {
                 error("Error. Failed to post student_tutors_free.\n");
         }
     }
-
+    // printf("DONE STUDENT THREAD %d\n",id);
     return 0;
 }
 
@@ -158,19 +162,23 @@ void *TutorThread(void *arg) {
     int id;
     id = *(int*)arg;
 
-    while (num_tutored < help * students) {
-        printf("Tutor %d waiting for a student\n", id);
+    int tutor_done = 0;
+
+    while (!tutor_done && num_tutored < students * help) {
+        printf("IN TUTOR THREAD %d\n",id);
+        // printf("Tutor %d waiting for a student\n", id);
 
         if (sem_wait(&coordinator_ready) != 0)
             error("Error. Failed to wait for coordinator_ready.\n");
-        
+            
+        printf("WAITING FOR priority_rooms_free IN TUTOR %d\n",id);
         if (sem_wait(&priority_rooms_free) != 0)
             error("Error. Failed to wait for priority_rooms_free.\n");
         
         struct Student current_student = (struct Student) {-1, -1};
 
         for (int i = 0; i < help; i++) {
-            if (&priority_rooms[i].front != NULL) {
+            if (priority_rooms[i].front != NULL) {
                 current_student = dequeue(&priority_rooms[i]);
                 break;
             }
@@ -182,6 +190,8 @@ void *TutorThread(void *arg) {
         if (current_student.id == -1)
             continue;
 
+
+        printf("WAITING FOR busy_tutors_free IN TUTOR %d\n",id);
         if (sem_wait(&busy_tutors_free) != 0)
             error("Error. Failed to wait for busy_tutors_free.\n");
         
@@ -190,11 +200,35 @@ void *TutorThread(void *arg) {
         if (sem_post(&busy_tutors_free) != 0)
             error("Error. Failed to post busy_tutors_free.\n");
 
-        printf("Tutor %d is here.\n", id);
+        // printf("Tutor %d is here.\n", id);
         usleep(200);
+
+        printf("WAITING FOR busy_tutors_free 2.0 IN TUTOR %d\n",id);
+        if (sem_wait(&busy_tutors_free) != 0)
+            error("Error. Failed to wait for busy_tutors_free.\n");
+        
+        busy_tutors--;
+        num_tutored++;
+
+        if (num_tutored + busy_tutors == help * students)
+            tutor_done = 1;
+
+        if (sem_post(&busy_tutors_free) != 0)
+            error("Error. Failed to post busy_tutors_free.\n");
+
+        // TODO: tutor
+        // TODO: start over
+        // TODO: exit after all students are helped (I might not be the tutor who helped last student)
+        // if (sem_wait(&num_tutored_free) != 0)
+        //     error("Error. Failed to wait for num_tutored_free.\n");
+        // num_tutored++;
+        // // printf("Tutor %d incremented help count. Help count = %d\n", id, num_tutored);
+        // if (sem_post(&num_tutored_free) != 0)
+        //     error("Error. Failed to post num_tutored_free.\n");
 
         printf("T: Student %d tutored by Tutor %d. Students tutored now = %d. Total sessions tutored = %d\n", current_student.id, id, busy_tutors, num_tutored);
 
+        printf("WAITING FOR student_tutors_free IN TUTOR %d\n",id);
         // let the student know I am ready
         if (sem_wait(&student_tutors_free) != 0)
             error("Error. Failed to wait for student_tutors_free.\n");
@@ -203,25 +237,26 @@ void *TutorThread(void *arg) {
 
         if (sem_post(&student_tutors_free) != 0)
             error("Error. Failed to post student_tutors_free.\n");
-
-        // TODO: tutor
-        // TODO: start over
-        // TODO: exit after all students are helped (I might not be the tutor who helped last student)
-        if (sem_wait(&num_tutored_free) != 0)
-            error("Error. Failed to wait for num_tutored_free.\n");
-        num_tutored++;
-        printf("Tutor %d incremented help count. Help count = %d\n", id, num_tutored);
-        if (sem_post(&num_tutored_free) != 0)
-            error("Error. Failed to post num_tutored_free.\n");
+        
+        if (tutor_done) {
+            for (int i = 0; i < tutors - 1; i++) {
+                if (sem_post(&coordinator_ready) != 0)
+                    error("Error. Failed to post coordinator_ready.\n");
+            }
+        }
     }
+
+    printf("DONE TUTOR THREAD %d\n",id);
     
     return 0;
 }
 
 void *CoordinatorThread(void *arg) {
-    printf("Hello World! Coordinator Thread.\n");
 
-    while (1) {
+    int coordinator_done = 0;
+    int waiting_students_now = 0;
+
+    while (!coordinator_done) {
         // wait for a student to call me
         if (sem_wait(&student_ready) != 0)
             error("Error. Failed to wait for student_ready.\n");
@@ -230,7 +265,7 @@ void *CoordinatorThread(void *arg) {
             error("Error. Failed to wait for waiting_room_free.\n");
         
         struct Student current_student = dequeue(waiting_room);
-
+        
         if (sem_post(&waiting_room_free) != 0)
             error("Error. Failed to post waiting_room_free.\n");
 
@@ -238,20 +273,38 @@ void *CoordinatorThread(void *arg) {
             error("Error. Failed to wait for priority_rooms_free.\n");
         
         enqueue(&priority_rooms[current_student.helped_times], current_student);
+        
 
         if (sem_post(&priority_rooms_free) != 0)
             error("Error. Failed to post priority_rooms_free.\n");
 
-        int waiting_students_now = chairs - num_free_chairs;
-        int total_requests = num_tutored + busy_tutors + waiting_students_now;
+        // int waiting_students_now = chairs - num_free_chairs;
+        // int total_requests = num_tutored + busy_tutors + waiting_students_now;
+        if (sem_wait(&chair_free) != 0)
+            error("Error. Failed to wait for chair_free.\n");
+
+        waiting_students_now = chairs - num_free_chairs;
         printf("C: Student %d with priority %d added to the queue. Waiting students now = %d. Total requests = %d\n",
                 current_student.id, current_student.helped_times, waiting_students_now, total_requests);
+
+        if (total_requests == help * students && waiting_students_now == 0)
+            coordinator_done = 1;
+
+        if (sem_post(&chair_free) != 0)
+            error("Error. Failed to post chair_free.\n");
 
         if (sem_post(&coordinator_ready) != 0)
             error("Error. Failed to post coordinator_ready.\n");
 
+        
     }
-
+    // printf("DONE COORDINATOR THREAD \n");
+    // if (waiting_students_now > 0) {
+    //     for (int i = 0; i < waiting_students_now; i++) {
+    //         if (sem_post(&coordinator_ready) != 0)
+    //             error("Error. Failed to post coordinator_ready.\n");
+    //     }
+    // }
     return 0;
 }
 
@@ -270,6 +323,7 @@ int main(int argc, char *argv[])
     num_free_chairs = chairs;
     num_tutored = 0;
     busy_tutors = 0;
+    total_requests = 0;
 
     if (students < 0 || tutors < 0 || chairs < 0 || help < 0)
         error("Error. Arguments must be nonnegative.\n");
@@ -311,6 +365,9 @@ int main(int argc, char *argv[])
     if (sem_init(&busy_tutors_free, 0, 1) != 0)
         error("Error. Failed to init busy_tutors_free semaphore\n");
 
+    if (sem_init(&total_requests_free, 0, 1) != 0)
+        error("Error. Failed to init total_requests_free semaphore\n");
+
     // start threads
     int i;
 
@@ -337,16 +394,16 @@ int main(int argc, char *argv[])
     // join threads
 
     for (i = 0; i < students; i++) {
-        printf("joining student thread %d\n", i);
+        // printf("joining student thread %d\n", i);
         Pthread_join(s_threads[i], NULL);
     }
 
     for (i = 0; i < tutors; i++) {
-        printf("joining tutor thread %d\n", i);
+        // printf("joining tutor thread %d\n", i);
         Pthread_join(t_threads[i], NULL);
     }
 
-    printf("joining coordinator thread 0\n");
+    // printf("joining coordinator thread 0\n");
     Pthread_join(*c_thread, NULL);
 
     // free memory
